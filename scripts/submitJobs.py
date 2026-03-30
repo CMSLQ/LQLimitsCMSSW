@@ -1,0 +1,81 @@
+import sys
+import os
+import subprocess
+import multiprocessing
+#from rich.progress import Progress
+from pathlib import Path
+import time
+from random import randint
+
+def GetOkCondorSites():
+    siteList = ""
+    with open("/etc/ciconnect/config.ini", "r") as siteConfFile:
+        for line in siteConfFile:
+            if "DefaultSites" in line:
+                siteList = line.split("=")[-1].strip().split(",")
+    sitesToExclude = ["T2_TR_METU", "T2_UA_KIPT", "T1_ES_PIC", "T2_TW_NCHC", "T2_US_MIT", "T2_UA_KIPT", "T2_ES_IFCA", "T2_EE_Estonia", "T2_ES_CIEMAT", "T3_US_UMiss","T1_DE_KIT"]
+    for s in sitesToExclude:
+        if s in siteList:
+            siteList.remove(s)
+    okSitesCmd = "+DESIRED_Sites=\""+",".join(siteList)
+    okSitesCmd = okSitesCmd.strip(",")+"\""
+    #print(okSitesCmd)
+    return okSitesCmd
+
+def progress_bar(i, tot, prefix='', suffix = '', length = 50, fill = '*'):
+    percent = ("{0:.1f}").format(100* (i/float(tot)))
+    filled = int(length * i //tot)
+    bar = fill * filled + '-' * (length - filled -1)
+    sys.stdout.write(f'\r{prefix} |{bar}|{percent}%{suffix} ')
+    sys.stdout.flush()
+
+def SubmitJob(f,dirname):
+    #print("submit file "+parentDir+"/"+dirname+"/"+f+"/condor.sub")
+    filename = parentDir+"/"+dirname+"/"+f+"/condor.sub"
+    #time.sleep(randint(2,5)) # for troubleshooting the progress bar
+    #subprocess.check_output([okSitesCmd,"condor_submit",filename])
+    exitCode = os.WEXITSTATUS(os.system("condor_submit "+filename+" > {}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)))
+#    with open("{}/{}/{}/condor_submit_log.txt".format(parentDir,dirname,f)) as f:
+#        lines = f.readlines()
+#    outTxt = " ".join(lines)
+    finishedFilesList.append(f)
+    progress_bar(len(finishedFilesList), nFiles,dirname)
+    #if "MAX_JOBS_PER_OWNER" in outTxt:
+    if not exitCode==0:
+        print("ERROR: something went wrong while submitting {}. You may be over the job submission limit".format(filename))
+
+if __name__ == "__main__":
+
+    parentDir = sys.argv[1]
+
+    okSitesCmd = GetOkCondorSites()
+
+    dirList = os.listdir(parentDir)
+    totalFiles = 0
+    print(dirList)
+    for d in dirList:
+        if not os.path.isdir(parentDir+"/"+d):
+            continue
+        mass = d.split(".")[1].replace("M","")
+        mass = int(mass)
+        #if not mass in [1300,1400,1500,1600]:
+        #    continue
+        #if not "-1" in d:
+        #    continue
+        #if mass < 600:
+        #    continue
+        #if mass == 300 and "-1" in d and "betaVals1To10" in d:
+        #    continue
+        filesToSubmit = os.listdir(parentDir+"/"+d)
+        filesToSubmit.sort()
+        nFiles = len(filesToSubmit)
+        print("\nSubmit {} condor.sub files for {}".format(nFiles,d))
+        manager = multiprocessing.Manager()
+        finishedFilesList = manager.list()
+        with multiprocessing.Pool(8) as pool:
+            for i,f in enumerate(filesToSubmit):
+                totalFiles += 1
+                pool.apply_async(SubmitJob, [f,d])#, callback = progress_bar(i+1, nFiles, d))
+            pool.close()
+            pool.join()
+    print("\nDone submitting jobs. Total number of sub files = {}".format(totalFiles))
